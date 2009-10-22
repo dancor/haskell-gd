@@ -38,7 +38,7 @@ module Graphics.GD (
                     drawString, measureString,
                     drawStringCircle,
                     -- * Colors
-                    rgb, rgba
+                    rgb, rgba, unRgba
                    ) where
 
 import Control.Exception (bracket)
@@ -569,6 +569,14 @@ rgba r g b a =
     (int g `shiftL` 8)  .|.
     int b
 
+unRgba :: Color -> (Int, Int, Int, Int)
+unRgba c = (int r, int g, int b, int a) where
+  a = c3 `shiftR` 8
+  r = c3 .&. 255
+  g = c2 .&. 255
+  b = c  .&. 255
+  c2 = c `shiftR` 8
+  c3 = c2 `shiftR` 8
 
 --
 -- * Utilities
