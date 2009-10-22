@@ -2,7 +2,7 @@ module Graphics.GD (
                     -- * Types
                     Image, Size, Point, Color,
                     -- * Creating and copying images
-                    newImage, copyImage, 
+                    newImage, copyImage,
                     copyRegion, copyRegionScaled,
                     -- * Memory management
                     withImage,
@@ -31,6 +31,7 @@ module Graphics.GD (
                     drawLine,
                     drawArc,
                     antiAliased,
+                    getPixel,
                     setPixel,
                     -- * Text
                     useFontConfig,
@@ -57,8 +58,8 @@ foreign import ccall "stdio.h fclose" c_fclose
     :: Ptr CFILE -> IO CInt
 
 fopen :: FilePath -> String -> IO (Ptr CFILE)
-fopen file mode = 
-    throwErrnoIfNull file $ withCString file $ 
+fopen file mode =
+    throwErrnoIfNull file $ withCString file $
                          \f -> withCString mode $ \m -> c_fopen f m
 
 fclose :: Ptr CFILE -> IO ()
@@ -116,37 +117,37 @@ foreign import ccall "gd.h gdImageGifPtr" gdImageGifPtr
 
 -- Creating and destroying images
 
-foreign import ccall "gd.h gdImageCreateTrueColor" gdImageCreateTrueColor 
+foreign import ccall "gd.h gdImageCreateTrueColor" gdImageCreateTrueColor
     :: CInt -> CInt -> IO (Ptr GDImage)
 
 foreign import ccall "gd.h gdImageDestroy" gdImageDestroy
     :: Ptr GDImage -> IO ()
 
-foreign import ccall "gd-extras.h &gdImagePtrDestroyIfNotNull" ptr_gdImagePtrDestroyIfNotNull 
+foreign import ccall "gd-extras.h &gdImagePtrDestroyIfNotNull" ptr_gdImagePtrDestroyIfNotNull
     :: FunPtr (Ptr (Ptr GDImage) -> IO ())
 
 
 -- Copying image parts
 
 foreign import ccall "gd.h gdImageCopy" gdImageCopy
-    :: Ptr GDImage -> Ptr GDImage 
+    :: Ptr GDImage -> Ptr GDImage
     -> CInt -> CInt -> CInt -> CInt
     -> CInt -> CInt -> IO ()
 
 foreign import ccall "gd.h gdImageCopyResampled" gdImageCopyResampled
-    :: Ptr GDImage -> Ptr GDImage 
+    :: Ptr GDImage -> Ptr GDImage
     -> CInt -> CInt -> CInt -> CInt
     -> CInt -> CInt -> CInt -> CInt -> IO ()
 
 {-
 foreign import ccall "gd.h gdImageCopyRotated" gdImageCopyRotated
-    :: Ptr GDImage -> Ptr GDImage 
+    :: Ptr GDImage -> Ptr GDImage
     -> CDouble -> CDouble -> CInt -> CInt
     -> CInt -> CInt -> CInt -> IO ()
 -}
 
 foreign import ccall "gd-extras.h gdImageCopyRotated90" gdImageCopyRotated90
-    :: Ptr GDImage -> Ptr GDImage 
+    :: Ptr GDImage -> Ptr GDImage
     -> CInt -> CInt -> CInt -> CInt
     -> CInt -> CInt -> CInt -> IO ()
 
@@ -169,6 +170,9 @@ foreign import ccall "gd.h gdImageArc" gdImageArc
 foreign import ccall "gd.h gdImageSetAntiAliased" gdImageSetAntiAliased
     :: Ptr GDImage -> CInt -> IO ()
 
+foreign import ccall "gd.h gdImageGetPixel" gdImageGetPixel
+    :: Ptr GDImage -> CInt -> CInt -> IO CInt
+
 foreign import ccall "gd.h gdImageSetPixel" gdImageSetPixel
     :: Ptr GDImage -> CInt -> CInt -> CInt -> IO ()
 
@@ -189,7 +193,7 @@ foreign import ccall "gd.h &gdFree" gdFree
     :: FunPtr (Ptr a -> IO ())
 
 -- We use a second level of indirection to allow storing a null pointer
--- when the image has already been freed. This allows 'withImage' to 
+-- when the image has already been freed. This allows 'withImage' to
 -- free the @gdImage@ early.
 newtype Image = Image (ForeignPtr (Ptr GDImage))
 
@@ -219,11 +223,11 @@ withImage :: IO Image -- ^ Image creation action.
           -> IO b
 withImage ini f = bracket ini freeImage f
 
--- | Overwrites the pointer with a null pointer, and frees the @gdImage@. 
+-- | Overwrites the pointer with a null pointer, and frees the @gdImage@.
 -- Safe to call twice. Doesn't free the 'ForeignPtr', we rely on the
 -- GC to do that.
 freeImage :: Image -> IO ()
-freeImage (Image fp) = withForeignPtr fp $ 
+freeImage (Image fp) = withForeignPtr fp $
   \pp -> do p <- peek pp
             poke pp nullPtr
             unless (p == nullPtr) $ gdImageDestroy p
@@ -263,7 +267,7 @@ copyRegion (srcX, srcY) (w, h) srcIPtr (dstX, dstY) dstIPtr
       \dstImg -> withImagePtr srcIPtr $
       \srcImg -> gdImageCopy dstImg srcImg (int dstX) (int dstY) (int srcX) (int srcY) (int w) (int h)
 
--- | Copy a region of one image into another, rescaling the region 
+-- | Copy a region of one image into another, rescaling the region
 copyRegionScaled :: Point -- ^ Source upper left-hand corner
                  -> Size -- ^ Size of source region
                  -> Image -- ^ Source image
@@ -325,7 +329,7 @@ loadGifByteString = onByteStringData loadGifData
 
 
 loadImageFile :: (Ptr CFILE -> IO (Ptr GDImage)) -> FilePath -> IO Image
-loadImageFile f file = 
+loadImageFile f file =
     do p <- throwIfNull ("Loading image from " ++ file) $ withCFILE file "rb" f
        mkImage p
 
@@ -335,7 +339,7 @@ loadImageData f sz buf =
        mkImage p
 
 onByteStringData :: (Int -> Ptr a -> IO b) -> B.ByteString -> IO b
-onByteStringData f bstr 
+onByteStringData f bstr
     = case B.toForeignPtr bstr of
         (fptr, start, sz) -> withForeignPtr fptr (\ptr -> f sz (plusPtr ptr start))
 
@@ -379,7 +383,7 @@ saveImageByteString f img = withImagePtr img (\p -> dataByteString (f p))
 dataByteString :: (Ptr CInt -> IO (Ptr a)) -> IO B.ByteString
 dataByteString f = alloca $ \szPtr -> do datPtr <- f szPtr >>= newForeignPtr gdFree . castPtr
                                          liftM (B.fromForeignPtr datPtr 0 . fromIntegral) (peek szPtr)
-                                       
+
 --
 -- * Getting information about images.
 --
@@ -401,24 +405,24 @@ imageSize_ p = do w <- #{peek gdImage, sx} p
 -- | Resize an image to a give size.
 resizeImage :: Int -- ^ width in pixels of output image
             -> Int -- ^ height in pixels of output image
-            -> Image 
+            -> Image
             -> IO Image
 resizeImage w h i = withImagePtr i f
-    where 
+    where
       f p = do let (outW,outH) = (fromIntegral w, fromIntegral h)
                (inW, inH) <- imageSize_ p
-               onNewImage outW outH $ \p' -> 
+               onNewImage outW outH $ \p' ->
                    gdImageCopyResampled p' p 0 0 0 0 outW outH inW inH
 
 -- | Rotate an image by a multiple of 90 degrees counter-clockwise.
-rotateImage :: Int -- ^ 1 for 90 degrees counter-clockwise, 
+rotateImage :: Int -- ^ 1 for 90 degrees counter-clockwise,
                    -- 2 for 180 degrees, etc.
-            -> Image 
+            -> Image
             -> IO Image
 rotateImage r i = withImagePtr i f
     where f p = do (inW,inH) <- imageSize_ p
                    let q = fromIntegral (r `mod` 4)
-                       (outW,outH) | r `mod` 2 == 0 = (inW,inH) 
+                       (outW,outH) | r `mod` 2 == 0 = (inW,inH)
                                    | otherwise      = (inH,inW)
                        srcX = if q == 1 || q == 2 then inW-1 else 0;
                        srcY = if q == 2 || q == 3 then inH-1 else 0;
@@ -438,14 +442,14 @@ drawFilledRectangle :: Point -- ^ Upper left corner
                     -> Point -- ^ Lower right corner
                     -> Color -> Image -> IO ()
 drawFilledRectangle (x1,y1) (x2,y2) c i =
-    withImagePtr i $ \p -> 
+    withImagePtr i $ \p ->
         gdImageFilledRectangle p (int x1) (int y1) (int x2) (int y2) c
 
 drawFilledEllipse :: Point -- ^ Center
                   -> Size  -- ^ Width and height
                   -> Color -> Image -> IO ()
 drawFilledEllipse (cx,cy) (w,h) c i =
-    withImagePtr i $ \p -> 
+    withImagePtr i $ \p ->
         gdImageFilledEllipse p (int cx) (int cy) (int w) (int h) c
 
 drawLine :: Point -- ^ Start
@@ -467,9 +471,14 @@ drawArc (cx,cy) (w,h) sp ep c i =
 -- | Use anti-aliasing when performing the given drawing function.
 --   This can cause a segault with some gd versions.
 antiAliased :: (Color -> Image -> IO a) -> Color -> Image -> IO a
-antiAliased f c i = 
+antiAliased f c i =
     do withImagePtr i (\p -> gdImageSetAntiAliased p c)
        f (#{const gdAntiAliased}) i
+
+getPixel :: Point -> Image -> IO Color
+getPixel (x,y) i =
+    withImagePtr i $ \p ->
+        gdImageGetPixel p (int x) (int y)
 
 setPixel :: Point -> Color -> Image -> IO ()
 setPixel (x,y) c i =
@@ -532,11 +541,11 @@ drawStringCircle :: Point -- ^ Center of text path circle
                  -> Color -- ^ Text color
                  -> Image -> IO ()
 drawStringCircle (ctrX, ctrY) rad textRad textFill fontName fontSize topTxt bottomTxt color img
-    = withCAString fontName $ 
+    = withCAString fontName $
       \cFontName -> withCAString topTxt $
-      \cTopTxt -> withCAString bottomTxt $ 
-      \cBottomTxt -> withImagePtr img $ 
-      \imgPtr -> do res <- gdImageStringFTCircle imgPtr (int ctrX) (int ctrY) (double rad) (double textRad) (double textFill) cFontName (double fontSize) cTopTxt cBottomTxt  color                    
+      \cTopTxt -> withCAString bottomTxt $
+      \cBottomTxt -> withImagePtr img $
+      \imgPtr -> do res <- gdImageStringFTCircle imgPtr (int ctrX) (int ctrY) (double rad) (double textRad) (double textFill) cFontName (double fontSize) cTopTxt cBottomTxt  color
                     unless (res == nullPtr) (peekCAString res >>= ioError . userError)
 
 --
@@ -554,7 +563,7 @@ rgba :: Int -- ^ Red (0-255)
           -> Int -- ^ Blue (0-255)
           -> Int -- ^ Alpha (0-127), 0 is opaque, 127 is transparent
           -> Color
-rgba r g b a = 
+rgba r g b a =
     (int a `shiftL` 24) .|.
     (int r `shiftL` 16) .|.
     (int g `shiftL` 8)  .|.
